@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0F1F18">
+<title>Mi puesto · Ventas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Mi puesto</h1>
+  <div class="net" id="net"><i></i><span>En línea</span></div>
+</header>
+
+<section id="t-vender" class="on">
+  <label for="sku">SKU del producto</label>
+  <input id="sku" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Ej: MAC-001">
+  <div class="card" id="prev" aria-live="polite"></div>
+  <div class="qty">
+    <button id="minus" aria-label="Restar una unidad">−</button>
+    <span class="n" id="qty">1</span>
+    <button id="plus" aria-label="Sumar una unidad">+</button>
+  </div>
+  <button class="go" id="go" disabled>Registrar venta</button>
+  <p class="today" id="today"></p>
+</section>
+
+<section id="t-stock">
+  <div class="bar"><h2>Stock</h2><button class="pri" id="add">Agregar producto</button></div>
+  <div class="bar"><button class="ghost" id="imp" style="flex:1">Importar planilla</button><button class="ghost" id="exp" style="flex:1">Exportar planilla</button></div>
+  <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" hidden>
+  <div id="plist"></div>
+</section>
+
+<section id="t-ventas">
+  <div class="bar"><h2>Ventas</h2>
+    <select id="rango" style="width:auto" aria-label="Período"><option value="hoy">Hoy</option><option value="todas">Todas</option></select>
+  </div>
+  <div class="sum"><div><b id="s-u">0</b><span>unidades</span></div><div><b id="s-t">$ 0</b><span>total</span></div></div>
+  <div id="vlist"></div>
+  <button class="ghost" id="csv" style="width:100%;margin-top:14px">Exportar planilla (.xlsx)</button>
+</section>
+
+<section id="t-ajustes">
+  <div class="bar"><h2>Google Sheets</h2></div>
+  <label for="c-url">URL de la aplicación web</label>
+  <input id="c-url" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec">
+  <label for="c-clave">Clave</label>
+  <input id="c-clave" autocomplete="off">
+  <p class="hint" id="sq-state" style="margin-top:12px"></p>
+  <button class="pri" id="g-test" style="width:100%;margin-top:12px">Probar conexión</button>
+  <div class="bar" style="margin-top:8px"><button class="ghost" id="g-up" style="flex:1">Subir productos</button><button class="ghost" id="g-down" style="flex:1">Traer productos</button></div>
+  <details>
+    <summary>Cómo conectar tu planilla</summary>
+    <ol>
+      <li>Subí <code>planilla-puesto.xlsx</code> a Google Drive y abrila con Google Sheets.</li>
+      <li>Abrí <b>Extensiones &gt; Apps Script</b>, pegá el contenido de <code>Code.gs</code> y cambiá la clave.</li>
+      <li>Ejecutá la función <code>preparar</code> y aceptá los permisos.</li>
+      <li><b>Implementar &gt; Nueva implementación &gt; Aplicación web</b>. Ejecutar como “Yo” y acceso “Cualquier persona”.</li>
+      <li>Pegá acá la URL y la misma clave, y tocá “Probar conexión”.</li>
+    </ol>
+  </details>
+</section>
+
+<nav role="tablist" aria-label="Secciones">
+  <button role="tab" data-t="vender" aria-selected="true">Vender</button>
+  <button role="tab" data-t="stock" aria-selected="false">Stock</button>
+  <button role="tab" data-t="ventas" aria-selected="false">Ventas</button>
+  <button role="tab" data-t="ajustes" aria-selected="false">Ajustes</button>
+</nav>
+
+<div id="toast" role="status"><span id="toast-msg"></span><button id="toast-act" hidden>Deshacer</button></div>
+
+<dialog id="dlg">
+  <form method="dialog" id="pform">
+    <h2 id="dlg-title">Producto</h2>
+    <label for="f-sku">SKU</label><input id="f-sku" required autocapitalize="characters" autocomplete="off">
+    <label for="f-nom">Nombre</label><input id="f-nom" required autocomplete="off">
+    <label for="f-pre">Precio</label><input id="f-pre" type="number" inputmode="decimal" min="0" step="any" required>
+    <label for="f-sto">Stock</label><input id="f-sto" type="number" inputmode="numeric" min="0" step="1" required>
+    <p class="err" id="f-err" style="margin-top:10px"></p>
+    <div class="acts">
+      <button type="button" class="ghost" id="f-cancel">Cancelar</button>
+      <button type="button" class="ghost danger" id="f-del">Eliminar</button>
+      <button type="submit" class="pri">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
