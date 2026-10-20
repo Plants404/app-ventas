@@ -7,6 +7,12 @@ const GEO_MAX_AGE = 60000
 const TOAST_DURATION_SHORT = 3500
 const TOAST_DURATION_LONG = 7000
 const LOCALE = 'es-UY'
+const SKU_TYPES = [
+  { prefix: 'MAC', label: 'Planta' },
+  { prefix: 'ISU', label: 'Insumo' },
+  { prefix: 'KIT', label: 'Kit de huerta' },
+  { prefix: 'SID', label: 'Sin identificar' },
+]
 
 function loadState() {
   let state
@@ -25,6 +31,13 @@ const money = n => '$ ' + Number(n).toLocaleString(LOCALE, { maximumFractionDigi
 
 const findP = (state, sku) => state.p.find(x => x.sku.toLowerCase() === String(sku).trim().toLowerCase())
 const isToday = iso => new Date(iso).toDateString() === new Date().toDateString()
+const nextSku = (prefix, products) => {
+  const pattern = new RegExp('^' + prefix + '-(\\d+)$', 'i')
+  const used = new Set(products.map(p => pattern.exec(String(p.sku || '').trim())).filter(Boolean).map(match => Number(match[1])))
+  let number = 1
+  while (used.has(number)) number++
+  return prefix + '-' + String(number).padStart(3, '0')
+}
 
 export default function App() {
   const [state, setState] = useState(loadState)
@@ -44,9 +57,12 @@ export default function App() {
 
   const [editing, setEditing] = useState(null)
   const dlgRef = useRef(null)
-  const [form, setForm] = useState({ sku: '', nom: '', pre: '', sto: '' })
+  const [form, setForm] = useState({ sku: '', nom: '', pre: '', sto: '', tipo: 'SID' })
   const [formErr, setFormErr] = useState('')
   const fileInputRef = useRef(null)
+  const skuCatalog = useRef([])
+  const openingDlg = useRef(false)
+  const [generatingSku, setGeneratingSku] = useState(false)
 
   const [rango, setRango] = useState('hoy')
   const [cfgUrl, setCfgUrl] = useState(state.c.url)
@@ -60,7 +76,13 @@ export default function App() {
 
   const sheetOk = () => !!(state.c.url && state.c.clave)
 
-  const gPost = (o) => fetch(state.c.url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ clave: state.c.clave }, o)) })
+  const gPost = async (o) => {
+    const response = await fetch(state.c.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ clave: state.c.clave }, o)) })
+    if (!response.ok) throw new Error('La planilla respondió con un error')
+    const result = await response.json()
+    if (!result.ok) throw new Error(result.error || 'La planilla no confirmó el envío')
+    return result
+  }
 
   const estadoSheetText = () => {
     const n = state.sq.length + state.aq.length
@@ -206,11 +228,35 @@ export default function App() {
     flushSheet()
   }
 
-  function openDlg(p) {
+  async function openDlg(p) {
+    if (openingDlg.current) return
+    openingDlg.current = true
     setEditing(p || null)
-    setForm({ sku: p ? p.sku : '', nom: p ? p.nombre : '', pre: p ? p.precio : '', sto: p ? p.stock : '' })
     setFormErr('')
-    setTimeout(() => dlgRef.current?.showModal(), 0)
+    setGeneratingSku(!p)
+    try {
+      let products = state.p
+      if (!p && sheetOk() && navigator.onLine) {
+        try {
+          products = [...state.p, ...await gLeer()]
+        } catch {
+          showToast('No se pudo consultar Google Sheets. Se generará el SKU con los productos locales.')
+        }
+      }
+      skuCatalog.current = products
+      const tipo = p ? (SKU_TYPES.find(x => p.sku.toUpperCase().startsWith(x.prefix + '-')) || SKU_TYPES[3]).prefix : 'SID'
+      setForm({
+        sku: p ? p.sku : nextSku(tipo, products),
+        nom: p ? p.nombre : '',
+        pre: p ? p.precio : '',
+        sto: p ? p.stock : '',
+        tipo,
+      })
+      setTimeout(() => dlgRef.current?.showModal(), 0)
+    } finally {
+      openingDlg.current = false
+      setGeneratingSku(false)
+    }
   }
   function closeDlg() { dlgRef.current?.close() }
 
@@ -222,11 +268,26 @@ export default function App() {
       bump()
     }
   }
-  function handleFormSubmit(e) {
+  async function handleFormSubmit(e) {
     e.preventDefault()
     const skuVal = form.sku.trim()
+    if (!skuVal) { setFormErr('El SKU es obligatorio.'); return }
     const dup = findP(state, skuVal)
     if (dup && dup !== editing) { setFormErr('Ya existe un producto con ese SKU.'); return }
+    if (!editing && sheetOk() && navigator.onLine) {
+      try {
+        const sheetProducts = await gLeer()
+        skuCatalog.current = [...state.p, ...sheetProducts]
+        if (sheetProducts.some(product => String(product.sku || '').trim().toLowerCase() === skuVal.toLowerCase())) {
+          const suggestedSku = nextSku(form.tipo, skuCatalog.current)
+          setForm(current => ({ ...current, sku: suggestedSku }))
+          setFormErr('Ese SKU ya existe en Google Sheets. Se generó uno disponible; revisalo antes de guardar.')
+          return
+        }
+      } catch {
+        showToast('No se pudo consultar Google Sheets. Se validará el SKU solo con los productos locales.')
+      }
+    }
     const d = { sku: skuVal, nombre: form.nom.trim(), precio: +form.pre, stock: Math.max(0, Math.floor(+form.sto)) }
     if (editing) Object.assign(editing, d)
     else state.p.push(d)
@@ -263,7 +324,7 @@ export default function App() {
   function importar(file) {
     if (!file) return
     if (!window.XLSX) { showToast('No se pudo cargar el módulo de planillas. Revisá tu conexión'); return }
-    if (!confirm('Los productos de la planilla van a agregarse o actualizar los que ya tenéstate (precio y stock). ¿Continuar?')) return
+    if (!confirm('Los productos de la planilla van a agregarse o actualizar los que ya tenés (precio y stock). ¿Continuar?')) return
     const r = new FileReader()
     r.onload = () => {
       try {
@@ -344,7 +405,7 @@ export default function App() {
       </section>
 
       <section id="t-stock" className={tab === 'stock' ? 'on' : ''}>
-        <div className="bar"><h2>Stock</h2><button className="pri" id="add" onClick={() => openDlg()}>Agregar producto</button></div>
+        <div className="bar"><h2>Stock</h2><button className="pri" id="add" disabled={generatingSku} onClick={() => openDlg()}>{generatingSku ? 'Consultando planilla…' : 'Agregar producto'}</button></div>
         <div className="bar"><button className="ghost" id="imp" style={{ flex: 1 }} onClick={() => fileInputRef.current?.click()}>Importar planilla</button><button className="ghost" id="exp" style={{ flex: 1 }} onClick={exportar}>Exportar planilla</button></div>
         <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" hidden ref={fileInputRef} onChange={e => { importar(e.target.files[0]); e.target.value = '' }} />
         <div id="plist">
@@ -423,6 +484,15 @@ export default function App() {
       <dialog id="dlg" ref={dlgRef}>
         <form method="dialog" id="pform" onSubmit={handleFormSubmit}>
           <h2 id="dlg-title">{editing ? 'Editar producto' : 'Nuevo producto'}</h2>
+          {!editing && <>
+            <label htmlFor="f-tipo">Tipo de producto</label>
+            <select id="f-tipo" value={form.tipo} onChange={e => {
+              const tipo = e.target.value
+              setForm(current => ({ ...current, tipo, sku: nextSku(tipo, [...skuCatalog.current, ...state.p]) }))
+            }}>
+              {SKU_TYPES.map(type => <option key={type.prefix} value={type.prefix}>{type.label} ({type.prefix})</option>)}
+            </select>
+          </>}
           <label htmlFor="f-sku">SKU</label><input id="f-sku" required autoCapitalize="characters" autoComplete="off" value={form.sku} onChange={e => setForm(f => ({ ...f, sku: e.target.value }))} />
           <label htmlFor="f-nom">Nombre</label><input id="f-nom" required autoComplete="off" value={form.nom} onChange={e => setForm(f => ({ ...f, nom: e.target.value }))} />
           <label htmlFor="f-pre">Precio</label><input id="f-pre" type="number" inputMode="decimal" min="0" step="any" required value={form.pre} onChange={e => setForm(f => ({ ...f, pre: e.target.value }))} />

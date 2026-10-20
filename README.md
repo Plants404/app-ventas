@@ -64,6 +64,7 @@ npm run lint
 ## Características
 
 - Venta en segundos: campo de SKU grande, selector de cantidad y un botón. Funciona con teclado y lectores de código de barras.
+- Alta de productos: propone el primer SKU disponible por tipo (MAC para plantas, ISU para insumos, KIT para kits de huerta y SID para productos sin identificar). El SKU sigue siendo editable; si Google Sheets está configurado y en línea, se consulta para evitar repetir códigos. Si no está disponible, se usa el catálogo local.
 - Control de stock por SKU: descuenta al vender, bloquea ventas sin stock suficiente y marca productos con poco stock (3 o menos) y agotados.
 - Registro automático: fecha, hora, coordenadas y precisión del GPS. Si el GPS falla, la venta se guarda igual.
 - Deshacer: revierte la última venta.
