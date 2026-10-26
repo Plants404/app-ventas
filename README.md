@@ -91,10 +91,10 @@ npm run lint:frontend
 ```bash
 npm run build:frontend
 ```
-La salida queda en `frontend/dist/`. El workspace ya apunta `livePreview.defaultPreviewPath` a `/frontend/dist/index.html`, por lo que "Show Preview" muestra la app construida. Los assets usan rutas relativas, por lo que tambièn funcionan al abrir el archivo directamente.
+La salida queda en `dist/` (raíz del repositorio). El workspace ya apunta `livePreview.defaultPreviewPath` a `/dist/index.html`, por lo que "Show Preview" muestra la app construida. Los assets usan rutas relativas, por lo que tambièn funcionan al abrir el archivo directamente.
 
 ### GitHub Pages
-Cada push a `main` ejecuta `.github/workflows/deploy.yml`, que construye el frontend y publica `frontend/dist` en GitHub Pages. Tambièn se puede lanzar manualmente desde la pestaña "Actions" (workflow_dispatch). En el repositorio, activar Pages con origen "GitHub Actions" (Settings > Pages).
+Cada push a `main` ejecuta `.github/workflows/deploy.yml`, que construye el frontend y publica `dist` en GitHub Pages. Tambièn se puede lanzar manualmente desde la pestaña "Actions" (workflow_dispatch). En el repositorio, activar Pages con origen "GitHub Actions" (Settings > Pages).
 
 ### Backend
 ```bash
