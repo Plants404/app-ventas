@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { api } from './api/index.js'
 
 const STORAGE_KEY = 'puestoVentas.v1'
 const LOW_STOCK_THRESHOLD = 3
@@ -18,6 +19,8 @@ function loadState() {
   let state
   try { state = JSON.parse(localStorage.getItem(STORAGE_KEY)) } catch {}
   state = state || { p: [], v: [], c: { url: '', clave: '' } }
+  state.p = state.p || []
+  state.v = state.v || []
   state.sq = state.sq || []
   state.aq = state.aq || []
   state.sf = state.sf || 0
@@ -54,6 +57,7 @@ export default function App() {
   const esperando = useRef(new Set())
   const syncing = useRef(false)
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [backendStatus, setBackendStatus] = useState('checking') // 'online' | 'offline' | 'checking'
 
   const [editing, setEditing] = useState(null)
   const dlgRef = useRef(null)
@@ -74,6 +78,66 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(t => ({ ...t, on: false })), canUndo ? TOAST_DURATION_LONG : TOAST_DURATION_SHORT)
   }
 
+  // --- Backend (MongoDB) Sync ---
+  const checkAndSyncBackend = async () => {
+    try {
+      const health = await api.checkHealth()
+      if (health.ok) {
+        setBackendStatus('online')
+
+        // 1. Cargar productos desde MongoDB
+        const serverProducts = await api.getProducts()
+        if (Array.isArray(serverProducts) && serverProducts.length > 0) {
+          state.p = serverProducts
+          save()
+          bump()
+        } else if (state.p.length > 0) {
+          // Si el servidor está vacío pero tenemos productos locales, sincronizarlos
+          await api.bulkSyncProducts(state.p)
+        }
+
+        // 2. Cargar ventas desde MongoDB
+        const serverSales = await api.getSales('todas')
+        if (Array.isArray(serverSales) && serverSales.length > 0) {
+          state.v = serverSales
+          save()
+          bump()
+        }
+      }
+    } catch {
+      setBackendStatus('offline')
+    }
+  }
+
+  const handleSyncWithBackend = async () => {
+    try {
+      showToast('Sincronizando con MongoDB...')
+      if (state.p.length > 0) {
+        await api.bulkSyncProducts(state.p)
+      }
+      for (const v of state.v) {
+        await api.createSale({
+          id: v.id,
+          ts: v.ts,
+          sku: v.sku,
+          nombre: v.nombre,
+          qty: v.qty,
+          precio: v.precio,
+          total: v.total,
+          lat: v.lat,
+          lng: v.lng,
+          acc: v.acc
+        }).catch(() => {})
+      }
+      setBackendStatus('online')
+      showToast('Sincronización con MongoDB completada')
+      checkAndSyncBackend()
+    } catch (e) {
+      showToast('Error al sincronizar: ' + e.message)
+    }
+  }
+
+  // --- Google Sheets Sync ---
   const sheetOk = () => !!(state.c.url && state.c.clave)
 
   const gPost = async (o) => {
@@ -129,16 +193,22 @@ export default function App() {
   const net = () => {
     const on = navigator.onLine
     setOnline(on)
-    if (on) flushSheet()
+    if (on) {
+      flushSheet()
+      checkAndSyncBackend()
+    }
   }
 
   useEffect(() => {
     const onOnline = () => net()
-    const onOffline = () => { setOnline(false) }
+    const onOffline = () => { setOnline(false); setBackendStatus('offline') }
     window.addEventListener('online', onOnline)
     window.addEventListener('offline', onOffline)
     if (navigator.geolocation) navigator.geolocation.getCurrentPosition(() => {}, () => {})
-    if (navigator.onLine) flushSheet()
+    if (navigator.onLine) {
+      flushSheet()
+      checkAndSyncBackend()
+    }
     setTimeout(() => document.getElementById('sku')?.focus(), 0)
     return () => {
       window.removeEventListener('online', onOnline)
@@ -181,7 +251,7 @@ export default function App() {
     if (e.key === 'Enter' && !goDisabled) sell()
   }
 
-  function sell() {
+  async function sell() {
     const p = findP(state, sku)
     if (!p || p.stock < qty) return
     p.stock -= qty
@@ -195,23 +265,50 @@ export default function App() {
     setQty(1)
     bump()
     setTimeout(() => document.getElementById('sku')?.focus(), 0)
+
+    // Guardar en backend (MongoDB)
+    if (backendStatus === 'online') {
+      try {
+        await api.createSale({
+          id: v.id,
+          ts: v.ts,
+          sku: v.sku,
+          nombre: v.nombre,
+          qty: v.qty,
+          precio: v.precio,
+          total: v.total
+        })
+      } catch (err) {
+        console.warn('Venta guardada localmente. Falló sincronización con backend:', err)
+      }
+    }
+
     locate(v)
   }
 
   function locate(v) {
     const fin = () => { esperando.current.delete(v.id); flushSheet() }
     if (!navigator.geolocation) { fin(); return }
-    navigator.geolocation.getCurrentPosition(pos => {
+    navigator.geolocation.getCurrentPosition(async pos => {
       v.lat = +pos.coords.latitude.toFixed(6)
       v.lng = +pos.coords.longitude.toFixed(6)
       v.acc = Math.round(pos.coords.accuracy)
       save()
       bump()
+
+      if (backendStatus === 'online') {
+        try {
+          await api.updateSaleLocation(v.id, { lat: v.lat, lng: v.lng, acc: v.acc })
+        } catch (e) {
+          console.warn('No se pudo actualizar ubicación en backend:', e)
+        }
+      }
+
       fin()
     }, fin, { enableHighAccuracy: true, timeout: GEO_TIMEOUT, maximumAge: GEO_MAX_AGE })
   }
 
-  function undo() {
+  async function undo() {
     if (!last) return
     const v = last
     const p = findP(state, v.sku)
@@ -225,6 +322,15 @@ export default function App() {
     save()
     bump()
     showToast('Venta deshecha')
+
+    if (backendStatus === 'online') {
+      try {
+        await api.undoSale(v.id)
+      } catch (e) {
+        console.warn('No se pudo anular venta en backend:', e)
+      }
+    }
+
     flushSheet()
   }
 
@@ -260,14 +366,22 @@ export default function App() {
   }
   function closeDlg() { dlgRef.current?.close() }
 
-  function handleDelete() {
+  async function handleDelete() {
     if (editing && confirm('¿Eliminar "' + editing.nombre + '"? Las ventas ya registradas se mantienen.')) {
+      if (backendStatus === 'online') {
+        try {
+          await api.deleteProduct(editing.sku)
+        } catch (err) {
+          showToast('Error al eliminar en backend: ' + err.message)
+        }
+      }
       state.p = state.p.filter(x => x !== editing)
       save()
       closeDlg()
       bump()
     }
   }
+
   async function handleFormSubmit(e) {
     e.preventDefault()
     const skuVal = form.sku.trim()
@@ -288,7 +402,23 @@ export default function App() {
         showToast('No se pudo consultar Google Sheets. Se validará el SKU solo con los productos locales.')
       }
     }
+
     const d = { sku: skuVal, nombre: form.nom.trim(), precio: +form.pre, stock: Math.max(0, Math.floor(+form.sto)) }
+
+    // Guardar en backend (MongoDB)
+    if (backendStatus === 'online') {
+      try {
+        if (editing) {
+          await api.updateProduct(editing.sku, d)
+        } else {
+          await api.createProduct(d)
+        }
+      } catch (err) {
+        setFormErr(err.message || 'Error al guardar en el backend')
+        return
+      }
+    }
+
     if (editing) Object.assign(editing, d)
     else state.p.push(d)
     save()
@@ -308,6 +438,7 @@ export default function App() {
     window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.aoa_to_sheet(hojaVentas), 'Ventas')
     window.XLSX.writeFile(wb, 'puesto-' + new Date().toISOString().slice(0, 10) + '.xlsx')
   }
+
   function mezclar(filas) {
     let nuevos = 0, act = 0
     filas.forEach(o => {
@@ -319,8 +450,16 @@ export default function App() {
     })
     save()
     bump()
+
+    if (backendStatus === 'online') {
+      api.bulkSyncProducts(filas).catch(err => {
+        console.warn('No se pudo sincronizar productos importados con MongoDB:', err)
+      })
+    }
+
     return { nuevos, act }
   }
+
   function importar(file) {
     if (!file) return
     if (!window.XLSX) { showToast('No se pudo cargar el módulo de planillas. Revisá tu conexión'); return }
@@ -382,13 +521,19 @@ export default function App() {
   const sumT = ventasList.reduce((a, v) => a + v.total, 0)
 
   const netClass = 'net' + (online ? '' : ' off')
-  const netText = online ? 'En línea' : 'Sin conexión'
+  const netText = !online
+    ? 'Sin conexión'
+    : backendStatus === 'online'
+    ? 'En línea (MongoDB)'
+    : 'En línea (Local)'
 
   return (
     <>
       <header>
         <h1>Mi puesto</h1>
-        <div className={netClass} id="net"><i></i><span>{netText}</span></div>
+        <div className={netClass} id="net" title={backendStatus === 'online' ? 'MongoDB y Backend conectados' : 'Almacenamiento local'}>
+          <i></i><span>{netText}</span>
+        </div>
       </header>
 
       <section id="t-vender" className={tab === 'vender' ? 'on' : ''}>
@@ -410,7 +555,28 @@ export default function App() {
         <input type="file" id="imp-file" accept=".xlsx,.xls,.csv" hidden ref={fileInputRef} onChange={e => { importar(e.target.files[0]); e.target.value = '' }} />
         <div id="plist">
           {state.p.length === 0 ? (
-            <div className="empty"><p>Todavía no cargaste productos.</p><button className="ghost" id="demo" onClick={() => { state.p = [{ sku: 'MAC-001', nombre: 'Maceta chica', precio: 250, stock: 12 }, { sku: 'SUC-010', nombre: 'Suculenta', precio: 180, stock: 2 }, { sku: 'HIE-020', nombre: 'Albahaca', precio: 120, stock: 1 }]; save(); bump() }}>Cargar 3 de ejemplo</button></div>
+            <div className="empty">
+              <p>Todavía no cargaste productos.</p>
+              <button
+                className="ghost"
+                id="demo"
+                onClick={async () => {
+                  const demoProducts = [
+                    { sku: 'MAC-001', nombre: 'Maceta chica', precio: 250, stock: 12 },
+                    { sku: 'SUC-010', nombre: 'Suculenta', precio: 180, stock: 2 },
+                    { sku: 'HIE-020', nombre: 'Albahaca', precio: 120, stock: 1 }
+                  ]
+                  state.p = demoProducts
+                  save()
+                  bump()
+                  if (backendStatus === 'online') {
+                    await api.bulkSyncProducts(demoProducts).catch(() => {})
+                  }
+                }}
+              >
+                Cargar 3 de ejemplo
+              </button>
+            </div>
           ) : (
             sortedProducts.map(p => (
               <button key={p.sku} className="row" data-sku={p.sku} onClick={() => openDlg(p)}>
@@ -449,7 +615,19 @@ export default function App() {
       </section>
 
       <section id="t-ajustes" className={tab === 'ajustes' ? 'on' : ''}>
-        <div className="bar"><h2>Google Sheets</h2></div>
+        <div className="bar"><h2>Backend (MongoDB)</h2></div>
+        <p className="hint">
+          {backendStatus === 'online'
+            ? '🟢 Conectado con la API de Node.js y la base de datos MongoDB.'
+            : backendStatus === 'checking'
+            ? '🟡 Verificando conexión con el backend...'
+            : '⚪ Servidor backend no detectado (la app funciona en modo local con localStorage).'}
+        </p>
+        <button className="pri" style={{ width: '100%', marginTop: '12px' }} onClick={handleSyncWithBackend}>
+          Sincronizar todo con MongoDB
+        </button>
+
+        <div className="bar" style={{ marginTop: '24px' }}><h2>Google Sheets</h2></div>
         <label htmlFor="c-url">URL de la aplicación web</label>
         <input id="c-url" type="url" inputMode="url" autoComplete="off" placeholder="https://script.google.com/macros/s/.../exec" value={cfgUrl} onChange={handleCfgUrl} />
         <label htmlFor="c-clave">Clave</label>

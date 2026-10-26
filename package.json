@@ -1,23 +1,15 @@
 {
-  "name": "appventas",
+  "name": "app-ventas-root",
   "private": true,
-  "version": "0.0.0",
-  "type": "module",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "oxlint src",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
-  },
-  "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "oxlint": "^1.88.0",
-    "vite": "^8.3.4"
+    "dev:frontend": "npm run dev --workspace=appventas-frontend",
+    "build:frontend": "npm run build --workspace=appventas-frontend",
+    "lint:frontend": "npm run lint --workspace=appventas-frontend",
+    "dev:backend": "npm run dev --workspace=appventas-backend",
+    "start:backend": "npm run start --workspace=appventas-backend"
   }
 }
