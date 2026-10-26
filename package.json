@@ -2,14 +2,11 @@
   "name": "app-ventas-root",
   "private": true,
   "workspaces": [
-    "frontend",
-    "backend"
+    "frontend"
   ],
   "scripts": {
     "dev:frontend": "npm run dev --workspace=appventas-frontend",
     "build:frontend": "npm run build --workspace=appventas-frontend",
-    "lint:frontend": "npm run lint --workspace=appventas-frontend",
-    "dev:backend": "npm run dev --workspace=appventas-backend",
-    "start:backend": "npm run start --workspace=appventas-backend"
+    "lint:frontend": "npm run lint --workspace=appventas-frontend"
   }
 }
